@@ -35,3 +35,9 @@ Two facts about the multiplier worth knowing:
 Invalid multiplier values (non-numeric, zero, negative, NaN) are ignored —
 the defaults apply independently per variable. Quota availability is never
 affected by these settings.
+
+## Codex and other subscriptions
+
+The Providers panel shows quota cards for the active provider **and** every
+other configured OAuth provider (e.g. OpenAI Codex alongside an active Z.AI
+model). OAuth providers without a configured credential are not queried.
