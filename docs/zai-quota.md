@@ -1,6 +1,7 @@
 # Z.AI (GLM Coding Plan) quota status — operator notes
 
-The provider-quota chip and the Settings → Providers quota cards can surface
+The provider-quota chip (and, with the multi-provider quota-cards feature,
+the Settings → Providers quota cards) can surface
 live Z.AI GLM Coding Plan usage (5-hour window first, then Monthly) plus a
 peak-rate marker. Data comes from Z.AI's monitor endpoint
 (`GET /api/monitor/usage/quota/limit`) — the same endpoint the Z.AI
