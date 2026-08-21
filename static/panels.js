@@ -11086,6 +11086,10 @@ async function _refreshProviderQuota(card,button){
     failed=true;
     next={ok:false,status:'unavailable',quota:null,message:e.message||t('provider_quota_unavailable'),client_fetched_at:new Date().toISOString()};
   }
+  if(!next||typeof next!=='object'){
+    failed=true;
+    next={ok:false,status:'unavailable',quota:null,message:'',client_fetched_at:new Date().toISOString()};
+  }
   if(!next.provider&&cardProvider) next.provider=cardProvider; // keep the card's identity in error rebuilds
   try{
     const fresh=_buildProviderQuotaCard(next);
@@ -11100,9 +11104,11 @@ async function _refreshProviderQuota(card,button){
         fresh.dataset.quotaCardSecondary='1';
         const titleEl=fresh.querySelector('.provider-quota-title');
         if(titleEl) titleEl.textContent=t('provider_quota_title_other');
-        // A failed refresh carries no display_name; preserve the subtitle the
-        // card already had so the Codex card never relabels itself
-        // "Active provider".
+        // Preserve the subtitle the card had at creation. Error rebuilds carry
+        // no display_name (the Codex card must never relabel itself "Active
+        // provider"); a successful refresh keeps it frozen too — plan/name
+        // changes surface on the next panel reopen, an accepted trade-off of
+        // creation-stamped identity.
         if(priorSubtitle){
           const subEl=fresh.querySelector('.provider-quota-subtitle');
           if(subEl) subEl.textContent=priorSubtitle;

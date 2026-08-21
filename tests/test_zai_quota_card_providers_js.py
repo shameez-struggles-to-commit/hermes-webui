@@ -241,7 +241,8 @@ let _html='';
 const titleEl={textContent:'Provider Quota'};
 const subEl={textContent:'OpenAI Codex · Plus'};
 const btn={addEventListener(){},setAttribute(){},removeAttribute(){},disabled:false,textContent:''};
-const makeCard=()=>{const c={className:'',dataset:{providerQuota:'openai-codex',quotaCardSecondary:'1'},set innerHTML(v){_html=v;},get innerHTML(){return _html;},querySelector(sel){if(sel==='[data-provider-quota-refresh]')return btn;if(sel==='.provider-quota-title')return titleEl;if(sel==='.provider-quota-subtitle')return subEl;return null;},addEventListener(){}};return c;};
+let _currentCard=null;
+const makeCard=()=>{const c={className:'',dataset:{providerQuota:'openai-codex',quotaCardSecondary:'1'},set innerHTML(v){_html=v;},get innerHTML(){return _html;},querySelector(sel){if(sel==='[data-provider-quota-refresh]')return btn;if(sel==='.provider-quota-title')return titleEl;if(sel==='.provider-quota-subtitle')return subEl;return null;},addEventListener(){},replaceWith(fresh){_currentCard=fresh;}};return c;};
 global.document={createElement(){return makeCard();}};
 global.localStorage={getItem(){return null;},setItem(){}};
 global.t=(k)=>k;
@@ -266,13 +267,17 @@ global.showToast=()=>{};
   console.log(JSON.stringify({
     afterFailSlug: afterFail.slug,
     secondFetchHadProvider: calls.length>1 && calls[1].includes('provider=openai-codex'),
-    subtitlePreserved: subEl.textContent==='OpenAI Codex · Plus',
-    title: titleEl.textContent
+    // Non-vacuous: assert through the REBUILT card (replaceWith-modeled),
+    // not the shared stub the old card still references.
+    rebuiltSubtitle: _currentCard && _currentCard.querySelector('.provider-quota-subtitle').textContent,
+    rebuiltTitle: _currentCard && _currentCard.querySelector('.provider-quota-title').textContent,
+    rebuiltSlug: _currentCard && _currentCard.dataset.providerQuota
   }));
 })().catch(e=>{console.error(e);process.exit(1);});
 """
     )
     assert out["afterFailSlug"] == "openai-codex"
     assert out["secondFetchHadProvider"] is True
-    assert out["subtitlePreserved"] is True
-    assert out["title"] == "provider_quota_title_other"
+    assert out["rebuiltSubtitle"] == "OpenAI Codex · Plus"
+    assert out["rebuiltTitle"] == "provider_quota_title_other"
+    assert out["rebuiltSlug"] == "openai-codex"
