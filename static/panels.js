@@ -10970,12 +10970,15 @@ async function _fetchProviderQuotaStatus(force=false, provider=null){
 // configured OAuth provider that can answer /api/provider/quota. Targets are
 // limited to providers with a configured credential (has_key) — the full
 // OAuth catalog would otherwise fire doomed fetches (and a Codex subprocess
-// probe) on every panel load.
+// probe) on every panel load. Fail-closed: without an active slug (active
+// fetch failed) secondaries are skipped rather than risked — the active
+// error card renders alone and the next panel open retries.
 function _providerQuotaCardTargets(data, activeQuota){
   const seen=new Set();
   const active=String((activeQuota&&activeQuota.provider)||'').toLowerCase();
-  if(active) seen.add(active);
   const out=[{provider:null, status:activeQuota}];
+  if(!active) return out;
+  seen.add(active);
   for(const p of (data&&data.providers)||[]){
     const id=String((p&&p.id)||'').toLowerCase();
     if(!id||seen.has(id)) continue;
@@ -10984,6 +10987,16 @@ function _providerQuotaCardTargets(data, activeQuota){
     out.push({provider:id});
   }
   return out;
+}
+
+// Render decision, extracted for testability. The ACTIVE card always renders
+// (error states explain themselves — pre-existing behavior); secondaries use
+// an allowlist and render only on a clean available result — fail-soft, and
+// closed against future unexpected status values (GUIDELINES #3).
+function _providerQuotaShouldRenderCard(status, isActive){
+  if(!status||!status.status) return false;
+  if(isActive) return true;
+  return status.ok===true&&status.status==='available';
 }
 
 let _loadProvidersPanelInFlight=null;
@@ -11003,37 +11016,18 @@ async function loadProvidersPanel(){
     const providers=(data.providers||[]).filter(p=>p.configurable||p.is_oauth||p.is_custom||p.is_plugin_provider||p.is_self_hosted);
     list.innerHTML='';
     _providerCardEls.clear();
-    // One quota card per target: the active provider first, then configured
-    // OAuth subscriptions (e.g. OpenAI Codex alongside an active Z.AI model).
-    // The ACTIVE card always renders (matching pre-existing behavior: error
-    // states explain themselves); secondary targets render only when they
-    // answer with usable data — fail-soft, no error cards.
+    // Progressive render: the active quota card and the provider cards use
+    // inputs already in hand and append immediately; secondary quota cards
+    // append in target order as each fetch settles. A cold secondary probe
+    // (e.g. a 30s Codex credential check) must never blank the panel.
     const targets=_providerQuotaCardTargets(data, activeQuota);
-    const settled=await Promise.allSettled(targets.map(tg=>tg.provider?_fetchProviderQuotaStatus(false, tg.provider):Promise.resolve(activeQuota)));
-    let firstCard=null;
-    settled.forEach((res,idx)=>{
-      if(res.status!=='fulfilled') return;
-      const status=res.value;
-      const isActive=idx===0;
-      if(!status||!status.status) return;
-      if(!isActive&&(status.status==='unavailable'||status.status==='unsupported'||status.status==='no_key'||status.status==='invalid_key')) return;
-      const quotaCard=_buildProviderQuotaCard(status);
-      if(!quotaCard) return;
-      if(isActive){
-        firstCard=quotaCard;
-        list.appendChild(quotaCard);
-        renderProviderCostChart(quotaCard); // async, fire-and-forget (active card only)
-      }else{
-        // Stamp identity at CREATION — the response echo can be wrong (error
-        // paths carry no provider field), so the card, not the payload, is
-        // the source of truth for refresh fetches and title rendering.
-        quotaCard.dataset.quotaCardSecondary='1';
-        quotaCard.dataset.providerQuota=targets[idx].provider||'';
-        const titleEl=quotaCard.querySelector('.provider-quota-title');
-        if(titleEl) titleEl.textContent=t('provider_quota_title_other');
-        list.appendChild(quotaCard);
+    if(_providerQuotaShouldRenderCard(activeQuota, true)){
+      const activeCard=_buildProviderQuotaCard(activeQuota);
+      if(activeCard){
+        list.appendChild(activeCard);
+        renderProviderCostChart(activeCard); // async, fire-and-forget (active card only)
       }
-    });
+    }
     if(providers.length===0){
       list.style.display='none';
       if(empty) empty.style.display='';
@@ -11043,6 +11037,25 @@ async function loadProvidersPanel(){
     list.style.display='';
     for(const p of providers){
       list.appendChild(_buildProviderCard(p));
+    }
+    // Secondaries stream in after the provider list, in target order.
+    for(const tg of targets.slice(1)){
+      try{
+        const status=await _fetchProviderQuotaStatus(false, tg.provider);
+        if(!_providerQuotaShouldRenderCard(status, false)) continue;
+        const quotaCard=_buildProviderQuotaCard(status);
+        if(!quotaCard) continue;
+        // Stamp identity at CREATION — the response echo can be wrong (error
+        // paths carry no provider field), so the card, not the payload, is
+        // the source of truth for refresh fetches and title rendering.
+        quotaCard.dataset.quotaCardSecondary='1';
+        quotaCard.dataset.providerQuota=tg.provider||'';
+        const titleEl=quotaCard.querySelector('.provider-quota-title');
+        if(titleEl) titleEl.textContent=t('provider_quota_title_other');
+        list.appendChild(quotaCard);
+      }catch(_e){
+        // secondary fetch failed: fail-soft, no card
+      }
     }
   }catch(e){
     list.innerHTML='<div style="color:var(--error);padding:12px;font-size:13px">Failed to load providers: '+esc(e.message||String(e))+'</div>';
@@ -11060,6 +11073,8 @@ async function _refreshProviderQuota(card,button){
   }
   const cardProvider=(card.dataset&&card.dataset.providerQuota)||null;
   const isSecondary=!!(card.dataset&&card.dataset.quotaCardSecondary==='1');
+  const cardTitleEl=card.querySelector?card.querySelector('.provider-quota-subtitle'):null;
+  const priorSubtitle=cardTitleEl?cardTitleEl.textContent:null;
   let failed=false;
   let next;
   try{
@@ -11071,6 +11086,7 @@ async function _refreshProviderQuota(card,button){
     failed=true;
     next={ok:false,status:'unavailable',quota:null,message:e.message||t('provider_quota_unavailable'),client_fetched_at:new Date().toISOString()};
   }
+  if(!next.provider&&cardProvider) next.provider=cardProvider; // keep the card's identity in error rebuilds
   try{
     const fresh=_buildProviderQuotaCard(next);
     if(fresh){
@@ -11084,6 +11100,13 @@ async function _refreshProviderQuota(card,button){
         fresh.dataset.quotaCardSecondary='1';
         const titleEl=fresh.querySelector('.provider-quota-title');
         if(titleEl) titleEl.textContent=t('provider_quota_title_other');
+        // A failed refresh carries no display_name; preserve the subtitle the
+        // card already had so the Codex card never relabels itself
+        // "Active provider".
+        if(priorSubtitle){
+          const subEl=fresh.querySelector('.provider-quota-subtitle');
+          if(subEl) subEl.textContent=priorSubtitle;
+        }
       }
       card.replaceWith(fresh);
       // Re-render the 7-day spend chart onto the rebuilt card — the quota

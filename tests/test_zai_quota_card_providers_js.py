@@ -84,6 +84,7 @@ console.log(JSON.stringify(out.map(t=>t.provider===null?'ACTIVE':t.provider)));
 
 
 def test_card_targets_without_active_status():
+    # Fail-closed: no active slug (active fetch failed) -> NO secondaries.
     out = _run_node(
         _extract(["_providerQuotaCardTargets"])
         + """
@@ -91,7 +92,7 @@ const out=_providerQuotaCardTargets({providers:[{id:'openai-codex',is_oauth:true
 console.log(JSON.stringify(out.map(t=>t.provider===null?'ACTIVE':t.provider)));
 """
     )
-    assert out == ["ACTIVE", "openai-codex"]
+    assert out == ["ACTIVE"]
 
 
 def test_fetch_url_includes_provider_param():
@@ -122,7 +123,7 @@ def test_build_card_sets_dataset_and_renders_windows():
     out = _run_node(
         """
 const titleEl={textContent:''};
-const btn={addEventListener(){}};
+const btn={addEventListener(){},setAttribute(){},removeAttribute(){},disabled:false,textContent:''};
 let _html='';
 const stub={
   className:'', dataset:{},
@@ -182,3 +183,96 @@ console.log(JSON.stringify(out.map(t=>t.provider===null?'ACTIVE':t.provider)));
 """
     )
     assert out == ["ACTIVE", "nous"]
+
+
+def test_should_render_card_allowlist():
+    # Active: any truthy status renders (error states explain themselves).
+    # Secondary: allowlist — ONLY ok+available renders (fail-closed against
+    # future unexpected status values, GUIDELINES #3).
+    out = _run_node(
+        _extract(["_providerQuotaShouldRenderCard"])
+        + """
+const cases=[
+  [{status:'available',ok:true},false,true],
+  [{status:'unavailable'},false,false],
+  [{status:'no_key'},false,false],
+  [{status:'invalid_key'},false,false],
+  [{status:'unsupported'},false,false],
+  [{status:'some_future_status'},false,false],
+  [{status:'unavailable'},true,true],
+  [{status:'no_key'},true,true],
+  [{},false,false],
+  [null,false,false]
+];
+console.log(JSON.stringify(cases.map(c=>_providerQuotaShouldRenderCard(c[0],c[1]))));
+"""
+    )
+    assert out == [True, False, False, False, False, False, True, True, False, False]
+
+
+def test_targets_fail_closed_without_active_slug():
+    # Active fetch failed (no provider echo): secondaries are skipped — the
+    # active error card renders alone; no duplicate-card self-inconsistency.
+    out = _run_node(
+        _extract(["_providerQuotaCardTargets"])
+        + """
+const data={providers:[{id:'openai-codex',is_oauth:true,has_key:true},{id:'nous',is_oauth:true,has_key:true}]};
+const out=_providerQuotaCardTargets(data,{ok:false,status:'unavailable',message:'x'});
+console.log(JSON.stringify(out.map(t=>t.provider===null?'ACTIVE':t.provider)));
+"""
+    )
+    assert out == ["ACTIVE"]
+
+
+def test_failed_refresh_preserves_secondary_identity_and_subtitle():
+    # The exact round-2 regression class: a FAILED refresh must keep the
+    # card's provider slug (dataset), fetch URL, title, and subtitle.
+    out = _run_node(
+        """
+const calls=[];
+let failNext=true;
+global.api=async(url)=>{
+  calls.push(url);
+  if(failNext) throw new Error('boom');
+  return {ok:true,status:'available',provider:'openai-codex',display_name:'OpenAI Codex',account_limits:{provider:'openai-codex',plan:'Plus',available:true,windows:[{label:'Session',used_percent:10,remaining_percent:90,reset_at:'2026-08-27T00:00:00Z'}],details:[],fetched_at:'2026-08-21T00:00:00Z'}};
+};
+global.Date.now=()=>1234;
+let _html='';
+const titleEl={textContent:'Provider Quota'};
+const subEl={textContent:'OpenAI Codex · Plus'};
+const btn={addEventListener(){},setAttribute(){},removeAttribute(){},disabled:false,textContent:''};
+const makeCard=()=>{const c={className:'',dataset:{providerQuota:'openai-codex',quotaCardSecondary:'1'},set innerHTML(v){_html=v;},get innerHTML(){return _html;},querySelector(sel){if(sel==='[data-provider-quota-refresh]')return btn;if(sel==='.provider-quota-title')return titleEl;if(sel==='.provider-quota-subtitle')return subEl;return null;},addEventListener(){}};return c;};
+global.document={createElement(){return makeCard();}};
+global.localStorage={getItem(){return null;},setItem(){}};
+global.t=(k)=>k;
+global.esc=(s)=>String(s);
+global.showToast=()=>{};
+"""
+        + _extract([
+            "_formatProviderQuotaMoney", "_formatProviderQuotaPercent", "_formatProviderQuotaReset",
+            "_formatProviderQuotaWindowLabel", "_formatProviderQuotaLastChecked", "_providerQuotaStateClass",
+            "_providerQuotaStatusLabel", "_providerQuotaWindowMeta", "_providerQuotaRetryAfterText",
+            "_providerQuotaUnavailableReason", "_providerQuotaPoolShouldDefaultOpen",
+            "_buildProviderQuotaPoolBreakdown", "_buildProviderQuotaCard",
+            "_fetchProviderQuotaStatus", "_refreshProviderQuota",
+        ])
+        + """
+(async()=>{
+  const card=makeCard();
+  await _refreshProviderQuota(card, btn);   // fails (throw)
+  const afterFail={slug:card.dataset.providerQuota};
+  failNext=false;
+  await _refreshProviderQuota(card, btn);   // succeeds on retry
+  console.log(JSON.stringify({
+    afterFailSlug: afterFail.slug,
+    secondFetchHadProvider: calls.length>1 && calls[1].includes('provider=openai-codex'),
+    subtitlePreserved: subEl.textContent==='OpenAI Codex · Plus',
+    title: titleEl.textContent
+  }));
+})().catch(e=>{console.error(e);process.exit(1);});
+"""
+    )
+    assert out["afterFailSlug"] == "openai-codex"
+    assert out["secondFetchHadProvider"] is True
+    assert out["subtitlePreserved"] is True
+    assert out["title"] == "provider_quota_title_other"
