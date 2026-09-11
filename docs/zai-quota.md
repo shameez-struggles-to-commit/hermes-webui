@@ -1,6 +1,7 @@
 # Z.AI (GLM Coding Plan) quota status — operator notes
 
-The provider-quota chip and the Settings → Providers quota cards can surface
+The provider-quota chip (and, with the multi-provider quota-cards feature,
+the Settings → Providers quota cards) can surface
 live Z.AI GLM Coding Plan usage (5-hour window first, then Monthly) plus a
 peak-rate marker. Data comes from Z.AI's monitor endpoint
 (`GET /api/monitor/usage/quota/limit`) — the same endpoint the Z.AI
@@ -71,3 +72,9 @@ Two facts about the multiplier worth knowing:
 Invalid multiplier values (non-numeric, zero, negative, NaN) are ignored —
 the defaults apply independently per variable. Quota availability is never
 affected by these settings.
+
+## Codex and other subscriptions
+
+The Providers panel shows quota cards for the active provider **and** every
+other configured OAuth provider (e.g. OpenAI Codex alongside an active Z.AI
+model). OAuth providers without a configured credential are not queried.
